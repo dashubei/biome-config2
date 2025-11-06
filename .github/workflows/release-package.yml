@@ -1,8 +1,14 @@
 name: Node.js Package
 
 on:
+  # 手動でのリリース作成時にも動かす
   release:
     types: [created]
+  # タグ不要で main への push でも自動実行
+  push:
+    branches: [main]
+  # 手動実行も可能に
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,7 +20,9 @@ jobs:
           node-version: 20
       - run: npm ci
 
+  # Release作成時のみ公開（手動リリース運用向け）
   publish-gpr:
+    if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -30,3 +38,57 @@ jobs:
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+  # main への push 時に自動で version を上げて公開（タグ不要）
+  auto-version-and-publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # バージョン更新コミット/タグの push に必要
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com/
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - run: npm ci
+      - name: Determine version bump from commits
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          FROM=$(jq -r '.before // ""' "$GITHUB_EVENT_PATH")
+          TO="$GITHUB_SHA"
+          if [[ -z "$FROM" || "$FROM" == "0000000000000000000000000000000000000000" ]]; then
+            RANGE="$TO"
+          else
+            RANGE="$FROM..$TO"
+          fi
+          LOG=$(git log --format=%B $RANGE || true)
+          BUMP="patch"
+          if echo "$LOG" | grep -Eqi 'BREAKING CHANGE|!:'; then
+            BUMP="major"
+          elif echo "$LOG" | grep -Eqi '^feat(\(.+\))?:'; then
+            BUMP="minor"
+          elif echo "$LOG" | grep -Eqi '^fix(\(.+\))?:'; then
+            BUMP="patch"
+          fi
+          echo "type=$BUMP" >> "$GITHUB_OUTPUT"
+      - name: Bump version and create tag
+        run: |
+          npm version "${{ steps.bump.outputs.type }}" -m "chore(release): v%s [skip ci]"
+      - name: Push commit and tags
+        run: |
+          git push --follow-tags
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish
