@@ -4,6 +4,9 @@
   "publishConfig": {
     "@dashubei:registry": "https://npm.pkg.github.com"
   },
+  "scripts": {
+    "test": "echo \"No test specified\""
+  },
   "devDependencies": {
     "@biomejs/biome": "2.3.4"
   }
